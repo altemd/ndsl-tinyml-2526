@@ -41,6 +41,7 @@ void MotionManager::update() {
 
       // Debounce logic
       bool isMovingDebounced = (now - _lastMotionDetectedTime < MOTION_DELAY);
+      _motionStatus  = (isMovingDebounced ? "ROTATING" : "STILL");
 
       if (isMovingDebounced != _lastMoving) {
         _lastMoving = isMovingDebounced;
