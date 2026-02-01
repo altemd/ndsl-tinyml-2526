@@ -46,7 +46,6 @@ void GyroManager::update() {
 
       // Logic: Stay "ROTATING" if we saw rotation within the last ROTATION_DELAY ms
       bool isRotatingDebounced = (now - _lastRotationDetectedTime < ROTATION_DELAY);
-      String a = getGyroStatus();
       _gyroStatus  = (isRotatingDebounced ? "ROTATING" : "STILL");
 
       if (isRotatingDebounced != _lastRotating) {
