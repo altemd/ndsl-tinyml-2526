@@ -41,6 +41,7 @@ class RunResult(BaseModel):
     startTime: float
     endTime: float
     duration: float
+    activeDuration: Optional[float] = None
     totalRuns: int
     accuracy: float
     fps: float

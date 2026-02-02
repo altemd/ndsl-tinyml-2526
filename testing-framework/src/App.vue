@@ -109,7 +109,7 @@ function loadImage(index: number) {
     if (imageList.value.length === 0) return;
     const filename = imageList.value[index];
     currentImageFullUrl.value = `http://localhost:8000/api/images/${selectedDataset.value}/${filename}`;
-    stats.value.currentImage = filename;
+    stats.value.currentImage = filename || '';
     currentImageIndex.value = index;
     stats.value.personDetected = null;
 }
@@ -130,6 +130,10 @@ async function startRun() {
     correctPredictions = 0;
     stats.value.personDetected = null;
     dataLog.value = []; // Clear log on start
+    
+    // Reset Last Signal
+    lastPacketTime.value = Date.now();
+    lastSeenString.value = "0s ago";
     
     const now = Date.now();
     startTime.value = now;
@@ -159,6 +163,13 @@ async function stopRun() {
     
     const endTime = Date.now();
     const duration = (endTime - (startTime.value || endTime)) / 1000;
+    
+    // Calculate Active Duration (Battery Life)
+    // Time from start until the last packet received
+    let activeDuration = 0;
+    if (startTime.value && lastPacketTime.value > startTime.value) {
+        activeDuration = (lastPacketTime.value - startTime.value) / 1000;
+    }
 
     await fetch('http://localhost:8000/api/run/stop', {
         method: 'POST',
@@ -168,6 +179,7 @@ async function stopRun() {
             startTime: startTime.value,
             endTime: endTime,
             duration: duration,
+            activeDuration: activeDuration,
             totalRuns: stats.value.totalRuns,
             accuracy: stats.value.accuracy,
             fps: stats.value.fps
@@ -231,11 +243,43 @@ async function fetchLabels() {
     }
 }
 
+const lastPacketTime = ref(Date.now());
+const lastSeenString = ref("0s ago");
+let lastSeenInterval: number | null = null;
+
+function updateLastSeen() {
+    const diff = Math.floor((Date.now() - lastPacketTime.value) / 1000);
+    lastSeenString.value = `${diff}s ago`;
+    
+    // Auto-detect "death" or "disconnection" if silence > 30s?
+    // User asked "Is the current system tracking...". 
+    // Let's just visualize it for now.
+    if (diff > 5 && stats.value.connected) {
+         // Maybe turn the dot yellow?
+    }
+}
+
 function handleDataPacket(data: string) {
     logMessage(data);
+
+    // Update Last Seen
+    lastPacketTime.value = Date.now();
+    lastSeenString.value = "0s ago";
+
+    // Re-apply System Messages Logic (Missed in previous turn)
+    if (data.includes("SYSTEM: ARDUINO_CONNECTED")) {
+        stats.value.connected = true;
+        return;
+    }
+    if (data.includes("SYSTEM: ARDUINO_DISCONNECTED") || data.includes("SYSTEM: ARDUINO_SCAN_FAILED") || data.includes("SYSTEM: ARDUINO_ERROR")) {
+        stats.value.connected = false;
+        return;
+    }
         
     // Mock/Actual Parsing
     if (data.includes("Person") || data.includes("Digit") || data.includes("No Person")) {
+            stats.value.totalRuns++;
+            // ... (rest is same)
             stats.value.totalRuns++;
             
             // Randomize FrameTime for realism if not present
@@ -351,6 +395,8 @@ onMounted(() => {
     fetchHistory();
     fetchLabels(); // Fetch ground truth
     connectWebSocket();
+    
+    lastSeenInterval = setInterval(updateLastSeen, 1000);
 });
 
 onUnmounted(() => {
@@ -414,11 +460,21 @@ onUnmounted(() => {
         </div>
 
         <!-- Bottom: Statistics -->
-        <Statistics 
-            class="stats-region"
-            :stats="stats"
-            @start-test="nextImage" 
-        />
+        <div class="stats-container">
+            <div class="status-bar-overlay">
+                 <span class="status-item">
+                    <span class="status-dot" :class="{ active: stats.connected, warning: !stats.connected && lastSeenString !== '0s ago' }"></span>
+                    {{ stats.connected ? 'Device Live' : 'Device Disconnected' }}
+                </span>
+                <span v-if="isRunning" class="status-item">Last Signal: {{ lastSeenString }}</span>
+            </div>
+            
+            <Statistics 
+                class="stats-region"
+                :stats="stats"
+                @start-test="nextImage" 
+            />
+        </div>
     </div>
     
     <!-- Slideshow Overlay (Absolute) -->
@@ -443,6 +499,7 @@ onUnmounted(() => {
                     <th>Date</th>
                     <th>Dataset</th>
                     <th>Duration</th>
+                    <th>Active</th>
                     <th>Inferences</th>
                     <th>Acc</th>
                     <th>Action</th>
@@ -453,6 +510,7 @@ onUnmounted(() => {
                     <td>{{ new Date(run.timestamp).toLocaleTimeString() }}</td>
                     <td>{{ run.dataset }}</td>
                     <td>{{ run.duration.toFixed(0) }}s</td>
+                    <td>{{ run.activeDuration ? run.activeDuration.toFixed(0) + 's' : '-' }}</td>
                     <td>{{ run.totalRuns }}</td>
                     <td>{{ (run.accuracy * 100).toFixed(1) }}%</td>
                     <td>
@@ -518,11 +576,37 @@ body {
 }
 
 /* Bottom: Statistics */
-.stats-region {
-    grid-area: 2 / 1 / 3 / 3; /* Spans both columns at bottom */
-    width: 100%;
-    height: 100%;
+.stats-container {
+    grid-area: 2 / 1 / 3 / 3;
+    display: flex;
+    flex-direction: column;
     border-top: 1px solid #333;
+    position: relative;
+    overflow: hidden;
+}
+
+.status-bar-overlay {
+    background: #1a1a1a;
+    padding: 0.5rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px solid #222;
+    font-size: 0.9rem;
+    color: #888;
+}
+
+.status-dot {
+    height: 10px; width: 10px;
+    background-color: #ff5252;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+}
+.status-dot.active { background-color: #4caf50; }
+.status-dot.warning { background-color: #ffeb3b; }
+
+.stats-region {
+    flex: 1;
     overflow-y: auto;
 }
 
