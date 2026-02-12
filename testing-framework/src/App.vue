@@ -51,6 +51,7 @@ const demoMode = ref(false);
 const dataLog = ref<{time: string, msg: string}[]>([]);
 const logContainer = ref<HTMLElement | null>(null);
 let demoInterval: number | null = null;
+let slideInterval: number | null = null;
 
 // Lock Feature
 const isLocked = ref(false);
@@ -147,6 +148,11 @@ async function startRun() {
         elapsedTime.value = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }, 1000);
 
+    // Auto-advance images every 1 second
+    slideInterval = setInterval(() => {
+        nextImage();
+    }, 1000);
+
     // Notify backend
     await fetch('http://localhost:8000/api/run/start', {
         method: 'POST',
@@ -159,6 +165,7 @@ async function stopRun() {
     if (!isRunning.value) return;
     
     clearInterval(timerInterval!);
+    if (slideInterval) clearInterval(slideInterval);
     isRunning.value = false;
     
     const endTime = Date.now();
