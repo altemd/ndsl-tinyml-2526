@@ -3,25 +3,15 @@ import os
 import json
 import time
 import glob
+import asyncio
 from typing import List, Optional
 from datetime import datetime
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import asyncio
 from ble_service import ble_manager
-
-app = FastAPI()
-
-# Allow CORS for frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,7 +53,10 @@ class ConnectionManager:
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:
-            await connection.send_text(message)
+            try:
+                await connection.send_text(message)
+            except:
+                pass
 
 manager = ConnectionManager()
 
@@ -73,13 +66,46 @@ async def forward_ble_to_ws(message):
 
 ble_manager.register_callback(forward_ble_to_ws)
 
-@app.on_event("startup")
-async def startup_event():
-    pass
+# --- BLE Background Connection Loop ---
 
-@app.on_event("shutdown")
-async def shutdown_event():
+async def ble_connect_loop():
+    """Keep trying to connect to Arduino in the background."""
+    while not ble_manager.connected:
+        try:
+            success = await ble_manager.scan_and_connect()
+            if success:
+                print("[BLE] ✓ Ready! Listening for inference results...\n")
+                return
+            else:
+                print("[BLE]   Retrying in 5 seconds...\n")
+                await asyncio.sleep(5)
+        except Exception as e:
+            print(f"[BLE] ✗ Error: {e}")
+            print("[BLE]   Retrying in 5 seconds...\n")
+            await asyncio.sleep(5)
+
+# --- Lifespan (replaces deprecated on_event) ---
+
+@asynccontextmanager
+async def lifespan(app):
+    print("\n" + "="*60)
+    print("  TinyML Extinction Testing Backend")
+    print("="*60 + "\n")
+    task = asyncio.create_task(ble_connect_loop())
+    yield
+    task.cancel()
     await ble_manager.disconnect()
+
+app = FastAPI(lifespan=lifespan)
+
+# Allow CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- BLE Endpoints ---
 
@@ -106,7 +132,6 @@ async def list_images(dataset: str = Query("person", enum=["person", "emnist"]))
 
 @app.get("/api/images/{dataset}/{filename}")
 async def get_image(dataset: str, filename: str):
-    # Security check to prevent directory traversal
     if ".." in dataset or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid path")
         
@@ -135,7 +160,6 @@ async def stop_run(result: RunResult):
     global current_run
     current_run = None
     
-    # Load existing history
     history = []
     if os.path.exists(HISTORY_FILE):
         try:
@@ -144,12 +168,10 @@ async def stop_run(result: RunResult):
         except json.JSONDecodeError:
             pass
     
-    # Add new result
     record = result.dict()
     record["timestamp"] = datetime.now().isoformat()
-    history.insert(0, record) # Prepend
+    history.insert(0, record)
     
-    # Save
     with open(HISTORY_FILE, 'w') as f:
         json.dump(history, f, indent=2)
         
@@ -174,7 +196,6 @@ async def delete_history_item(timestamp: str):
         with open(HISTORY_FILE, 'r') as f:
             history = json.load(f)
         
-        # Filter out the item
         new_history = [item for item in history if item.get("timestamp") != timestamp]
         
         with open(HISTORY_FILE, 'w') as f:
